@@ -2,6 +2,7 @@
 
 from multiprocessing import *;
 from urllib import urlopen;
+from pymongo import *;
 import pickle;
 import time;
 import sys;
@@ -152,19 +153,13 @@ if __name__ == '__main__':
 	crawl(pagehash, links, errors);
 	crawlEnd=time.time();
 
-	#words=dict();
-
+	records=[];
 	for url in dict(pagehash):
-	#	pagewords=pagehash[url].words;
 		print pagehash[url];
-	#	print 'has approximately', sum(pagewords.values()), 'words\n';
-	#	for w in pagewords:
-	#		if w in words:
-	#			words[w]+=1;
-	#		else: words[w]=1;
-
-	#for w in sorted(words):
-	#	print w, '=>', words[w];
+		records.append(pagehash[url].__dict__);
+	con=Connection();
+	con['crawldb']['pages'].insert(records);
+	con.disconnect();
 
 	if len(errors) > 0:
 		with open('error.log', 'w') as f:
