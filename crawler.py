@@ -12,9 +12,13 @@ linkfinder=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I);
 wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I);
 tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S|re.X);
 
-MinPages=100;
-MaxChildren=30;
-TimeLimit=3600;
+if len(sys.argv) != 4:
+	print 'usage: {0} pages children timelimit'.format(sys.argv[0]);
+	sys.exit(0);
+
+MinPages=int(sys.argv[1]);
+MaxChildren=int(sys.argv[2]);
+TimeLimit=int(sys.argv[3]);
 
 class site(object):
 	
@@ -105,7 +109,7 @@ def visitpage(l, pagehash, links, errors):
 
 def crawl(pagehash, links, errors, start=time.time()):
 	i=0;
-	while len(pagehash) < MinPages and time.time() - start < TimeLimit:
+	while (len(pagehash) < MinPages) and ((time.time() - start) < TimeLimit):
 
 		if len(active_children()) - 1 < MaxChildren:
 			try:
@@ -145,9 +149,9 @@ if __name__ == '__main__':
 		except Exception as e:
 			errors.append((time.ctime(), e));
 
-	start=time.time();
+	crawlStart=time.time();
 	crawl(pagehash, links, errors);
-	end=time.time();
+	crawlEnd=time.time();
 
 	words=dict();
 
@@ -168,4 +172,4 @@ if __name__ == '__main__':
 			for e in errors:
 				f.write('[{0}] {1}\n'.format(*e));
 
-	print "crawled {0} pages in {1} seconds".format(len(pagehash), end-start);
+	print "crawled {0} pages in {1} seconds".format(len(pagehash), crawlEnd-crawlStart);

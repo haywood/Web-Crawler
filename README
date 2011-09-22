@@ -1,0 +1,7 @@
+README for crawler.py
+
+usage: crawler.py pages children timelimit
+
+	pages the minimum number of pages to be crawled.
+	children the maximum number of child processes to generate for page processing.
+	timelimit an integer number of seconds. The timelimit is applied to the crawling phase itself and takes precedence over pages.
