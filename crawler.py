@@ -1,14 +1,15 @@
 #!/usr/bin/python
 
 from multiprocessing import *;
+from urlparse import urlparse;
 from urllib import urlopen;
 from pymongo import *;
+import htmlentitydefs;
 import pickle;
 import time;
 import sys;
 import re;
 
-domfinder=re.compile("^http://[^/]*", flags=re.I);
 linkfinder=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I);
 wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I);
 tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S);
@@ -21,12 +22,39 @@ MinPages=int(sys.argv[1]);
 MaxChildren=int(sys.argv[2]);
 TimeLimit=int(sys.argv[3]);
 
+##
+# Removes HTML or XML character references and entities from a text string.
+# By: Fredrik Lundh on 10/28/2006 
+# @param text The HTML (or XML) source text.
+# @return The plain text, as a Unicode string, if necessary.
+
+def unescape(text):
+    def fixup(m):
+        text = m.group(0)
+        if text[:2] == "&#":
+            # character reference
+            try:
+                if text[:3] == "&#x":
+                    return unichr(int(text[3:-1], 16))
+                else:
+                    return unichr(int(text[2:-1]))
+            except ValueError:
+                pass
+        else:
+            # named entity
+            try:
+                text = unichr(htmlentitydefs.name2codepoint[text[1:-1]])
+            except KeyError:
+                pass
+        return text # leave as is
+    return re.sub("&#?\w+;", fixup, text)
+
 class site(object):
 	
 	def __init__(self, url):
 		self._url=url;
-		self._domain=domfinder.search(url).group(0);
-		self._page=urlopen(url).read();
+		self._domain=urlparse(url).netloc;
+		self._page=unescape(urlopen(url).read());
 		self._ideg=0;
 		self._odeg=0;
 		self._words=False;
@@ -87,11 +115,14 @@ class site(object):
 		s+="\noutdegree: "+str(self.outdegree);
 		return s;
 
-def visitpage(con, l, links, newpage, errors):
+def visitpage(con, l, links, newpage, errlist):
 
 	pages=con.crawldb.pages;
-	if pages.find_one({'_url':l}):
-		pages.update({'_url':l}, {'$inc':{'_ideg':1}});
+	try:
+		if pages.find_one({'_url':l}):
+			pages.update({'_url':l}, {'$inc':{'_ideg':1}});
+	except errors.AutoReconnect as e:
+		errlist.append((time.ctime(), e));
 
 	else:
 		try:
@@ -108,19 +139,19 @@ def visitpage(con, l, links, newpage, errors):
 			newpage.put(l);
 
 		except Exception as e:
-			errors.append((time.ctime(), e)); 
+			errlist.append((time.ctime()+' '+l, e)); 
 
-def crawl(con, links, newpage, errors, start=time.time()):
+def crawl(con, links, newpage, errlist, start=time.time()):
 	i=0;
 	while (newpage.qsize() < MinPages) and ((time.time() - start) < TimeLimit):
 		if len(active_children()) - 1 < MaxChildren:
 			try:
 				link=links.get(False);
 				Process(name="visitor-"+str(i), target=visitpage, 
-							args=(con, link, links, newpage, errors)).start();
+							args=(con, link, links, newpage, errlist)).start();
 				i+=1;
 			except Exception as e:
-				errors.append((time.ctime(), e));
+				errlist.append((time.ctime(), e));
 
 	print 'done crawling';
 
@@ -134,7 +165,7 @@ if __name__ == '__main__':
 
 	manager=Manager();
 	links=manager.Queue();
-	errors=manager.list();
+	errlist=manager.list();
 	newpage=manager.Queue();
 
 	with open('seeds') as f:
@@ -143,17 +174,18 @@ if __name__ == '__main__':
 
 	con=Connection();
 	crawlStart=time.time();
-	crawl(con, links, newpage, errors);
+	crawl(con, links, newpage, errlist);
 	crawlEnd=time.time();
 
 	with open('seeds', 'w') as f:
 		while links.qsize() > 0:
 			f.write(links.get()+'\n');
 
-	if len(errors) > 0:
-		with open('error.log', 'w') as f:
-			for e in errors:
+	if len(errlist) > 0:
+		with open('error.log', 'a') as f:
+			for e in errlist:
 				f.write('[{0}] {1}\n'.format(*e));
 
 	print "crawled {0} pages in {1} seconds".format(newpage.qsize(), crawlEnd-crawlStart);
+	print "the database now contains {0} sites".format(con.crawldb.pages.find().count());
 	con.disconnect();
