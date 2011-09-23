@@ -1,6 +1,8 @@
-README for crawler.py
+crawler.py
 
 usage: crawler.py pages children timelimit
+
+	Given a seed file called seeds, crawler.py will crawl the web, starting with the urls therein. Each unique url it finds will be added to its database. If a url is not unique, that url's inbound links count will be incremented by 1. The script requires MongoDB and PyMongo.
 
 	pages the minimum number of pages to be crawled.
 	children the maximum number of child processes to generate for page processing.

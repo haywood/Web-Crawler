@@ -11,7 +11,7 @@ import re;
 domfinder=re.compile("^http://[^/]*", flags=re.I);
 linkfinder=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I);
 wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I);
-tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S|re.X);
+tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S);
 
 if len(sys.argv) < 4 or len(sys.argv) > 4:
 	print 'usage: {0} pages children timelimit'.format(sys.argv[0]);
@@ -87,40 +87,42 @@ class site(object):
 		s+="\noutdegree: "+str(self.outdegree);
 		return s;
 
-def visitpage(l, pagehash, links, errors):
+def visitpage(con, l, links, newpage, errors):
 
-	if l in pagehash:
-		s=pagehash[l];
-		s.indegree+=1;
-		pagehash[l]=s;
+	pages=con.crawldb.pages;
+	if pages.find_one({'_url':l}):
+		pages.update({'_url':l}, {'$inc':{'_ideg':1}});
 
 	else:
 		try:
-			s=site(l);
-			pagelinks=linkfinder.findall(s.page);
-			s.indegree=1;
-			s.outdegree=len(pagelinks);
-			pagehash[l]=s;
+			s=site(l).__dict__;
+			pagelinks=linkfinder.findall(s['_page']);
+			s['_outdegree']=len(pagelinks);
+			s['_indegree']=1;
+			pages.insert(s);
 
 			for link in pagelinks:
-				links.put(link);
+				if not pages.find_one({'_url': link}):
+					links.put(link);
+
+			newpage.put(l);
 
 		except Exception as e:
 			errors.append((time.ctime(), e)); 
 
-def crawl(pagehash, links, errors, start=time.time()):
+def crawl(con, links, newpage, errors, start=time.time()):
 	i=0;
-	while (len(pagehash) < MinPages) and ((time.time() - start) < TimeLimit):
+	while (newpage.qsize() < MinPages) and ((time.time() - start) < TimeLimit):
 		if len(active_children()) - 1 < MaxChildren:
 			try:
 				link=links.get(False);
 				Process(name="visitor-"+str(i), target=visitpage, 
-							args=(link, pagehash, links, errors)).start();
+							args=(con, link, links, newpage, errors)).start();
 				i+=1;
 			except Exception as e:
 				errors.append((time.ctime(), e));
 
-	print "done crawling";
+	print 'done crawling';
 
 	for child in active_children():
 		if re.match("visitor", child.name):
@@ -130,40 +132,28 @@ def crawl(pagehash, links, errors, start=time.time()):
 
 if __name__ == '__main__':
 
-	seeds=set(['http://www.cnn.com', 'http://www.huffingtonpost.com', 'http://www.reddit.com']);
-
 	manager=Manager();
-	pagehash=manager.dict();
 	links=manager.Queue();
 	errors=manager.list();
+	newpage=manager.Queue();
 
-	for seed in seeds:
-		try:
-			s=site(seed);
-			pagelinks=linkfinder.findall(s.page);
-			for link in pagelinks:
-				links.put(link);
-			s.outdegree=len(pagelinks);
-			pagehash[seed]=s;
+	with open('seeds') as f:
+		for line in f:
+			links.put(line.strip());
 
-		except Exception as e:
-			errors.append((time.ctime(), e));
-
+	con=Connection();
 	crawlStart=time.time();
-	crawl(pagehash, links, errors);
+	crawl(con, links, newpage, errors);
 	crawlEnd=time.time();
 
-	records=[];
-	for url in dict(pagehash):
-		print pagehash[url];
-		records.append(pagehash[url].__dict__);
-	con=Connection();
-	con['crawldb']['pages'].insert(records);
-	con.disconnect();
+	with open('seeds', 'w') as f:
+		while links.qsize() > 0:
+			f.write(links.get()+'\n');
 
 	if len(errors) > 0:
 		with open('error.log', 'w') as f:
 			for e in errors:
 				f.write('[{0}] {1}\n'.format(*e));
 
-	print "crawled {0} pages in {1} seconds".format(len(pagehash), crawlEnd-crawlStart);
+	print "crawled {0} pages in {1} seconds".format(newpage.qsize(), crawlEnd-crawlStart);
+	con.disconnect();
