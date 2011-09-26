@@ -54,85 +54,66 @@ def site(url):
 			'_page':unescape(urlopen(url).read())
 			}
 
-def visit(link, links, errlist):
+def link(to, frm):
+	return {'_to':to, '_from':frm}
+
+def visit(l):
 
 	con=Connection()
 	pages=con.crawldb.pages
+	links=con.crawldb.links
 	try:
-		if pages.find_one({'_url':link[1]}):
-			pages.update({'_url':link[1]}, {'$addToSet': {'_inbound':link[0]}})
+		if pages.find_one({'_url':l['_to']}):
+			pages.update({'_url':l['_to']}, {'$addToSet': {'_inbound':l['_from']}})
 
 		else:
-			s=site(link[1])
+			s=site(l['_to'])
+
 			pagelinks=linkfinder.findall(s['_page'])
-			s['_outbound']=filter(lambda x: x != link[1], pagelinks)
-			links+=[(link[1], l) for l in s['_outbound']]
-			if link[0]: s['_inbound']=[link[0]];
+			s['_outbound']=filter(lambda x: x != l['_to'], pagelinks)
+			if l['_from']: s['_inbound']=[l['_from']];
+
+			if s['_outbound']:
+				links.insert([link(o, l['_to']) for o in s['_outbound']])
 			pages.insert(s)
 		return True
 
 	except Exception as e:
-		errlist.append((time.ctime()+' '+link[1], e))
-		return False
+		if not links.find_one(l):
+			links.insert(l)
 
 def elapsed(s):
 	return time.time()-s
 
-def readlinks(links):
-	with open('seeds') as f:
-		for line in f:
-			links.append(eval(line))
-
-	if len(links) == 0:
-		print 'error empty seed file'
-		sys.exit(1)
-
-def writelinks(links):
-	if len(links) > 0:
-		with open('seeds', 'w') as f:
-			for link in links:
-				try: f.write(str(link)+'\n')
-				except: pass
-
-def logerrors(errlist):
-	if len(errlist) > 0:
-		with open('error.log', 'a') as f:
-			for e in errlist:
-				try: f.write('[{0}] {1}\n'.format(*e))
-				except: pass
-
-def visitpage(pool, link, links, errlist):
-	return pool.apply_async(visit, (link, links, errlist))
+def visitpage(pool, l):
+	return pool.apply_async(visit, (l,))
 
 def crawl(start=time.time()):
+
 	con=Connection()
 	pages=con.crawldb.pages
 	lastcount=startcount=pages.count()
-	manager=Manager()
-	links=manager.list()
-	errlist=manager.list()
+	links=con.crawldb.links
+
 	results=[]
 	newpages=0
-
-	readlinks(links)
 
 	pool=Pool(processes=MaxChildren)
 
 	while (newpages < MinPages) and (elapsed(start) < TimeLimit):
 
-		if len(links) > 0:
-			link=links.pop(0)
-			results.append((link, visitpage(pool, link, links, errlist)))
+		if links.count() > 0:
+			l=links.find_one()
+			links.remove(l)
+			results.append((l, visitpage(pool, l)))
 
 		while len(results) >= MaxChildren:
 			i=0
 			while i < len(results) and len(results) > 0: 
-				l, r=results[i]
+				r=results[i][1]
 				r.wait(0.01)
 				if r.ready(): 
 					results.pop(i)
-					if r.get() == False:
-						links.append(l)
 				else: i+=1
 
 		if pages.count() > lastcount:
@@ -142,7 +123,8 @@ def crawl(start=time.time()):
 	while results:
 		l, r=results.pop(0)
 		if not r.ready(): 
-			links.append(l)
+			if not links.find_one(l):
+				links.insert(l)
 
 	print 'done crawling'
 	pool.terminate()
@@ -152,10 +134,6 @@ def crawl(start=time.time()):
 
 	print "crawled {0} pages in {1} seconds".format(newpages, elapsed(start))
 	print "the database now contains {0} sites".format(pages.count())
-	print 'writing links and logging errors'
-
-	writelinks(links)
-	logerrors(errlist)
 
 if __name__ == '__main__':
 	crawl()
