@@ -60,14 +60,14 @@ def visit(link, links, errlist):
 	pages=con.crawldb.pages
 	try:
 		if pages.find_one({'_url':link[1]}):
-			pages.udate({'_url':link[1]}, {'$addToSet': {'_inbound':link[0]}})
+			pages.update({'_url':link[1]}, {'$addToSet': {'_inbound':link[0]}})
 
 		else:
 			s=site(link[1])
 			pagelinks=linkfinder.findall(s['_page'])
 			s['_outbound']=filter(lambda x: x != link[1], pagelinks)
 			links+=[(link[1], l) for l in s['_outbound']]
-			if link[0]: s['_inbound'].append(link[0]);
+			if link[0]: s['_inbound']=[link[0]];
 			pages.insert(s)
 		return True
 
@@ -139,8 +139,13 @@ def crawl(start=time.time()):
 			lastcount=pages.count()
 			newpages=lastcount-startcount
 
+	while results:
+		l, r=results.pop(0)
+		if not r.ready(): 
+			links.append(l)
+
 	print 'done crawling'
-	pool.close()
+	pool.terminate()
 	pool.join()
 	print 'done cleanup'
 
