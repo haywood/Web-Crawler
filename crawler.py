@@ -49,143 +49,74 @@ def unescape(text):
         return text # leave as is
     return re.sub("&#?\w+;", fixup, text)
 
-class site(object):
-	
-	def __init__(self, url):
-		self._url=url;
-		self._domain=urlparse(url).netloc;
-		self._page=unescape(urlopen(url).read());
-		self._ideg=0;
-		self._odeg=0;
-		self._words=False;
+def site(url):
+	return {'_url':url, '_page':unescape(urlopen(url).read())};
 
-	@property
-	def url(self):
-		return self._url;
+def visitpage(con, links, errlist):
 
-	@property
-	def domain(self):
-		return self._domain;
+	if len(links) == 0:
+		return;
 
-	@property
-	def page(self):
-		return self._page;
-
-	def indegree():
-		def fget(self):
-			return self._ideg;
-
-		def fset(self, ideg):
-			self._ideg=ideg;
-		
-		return locals();
-
-	indegree=property(**indegree());
-
-	@property
-	def words(self):
-		if self._words==False:
-			words=tagkiller.sub(' ', self.page);
-			words=wordfinder.finditer(words);
-			self._words=dict();
-
-			for word in words:
-				w=word.group(1).lower();
-				if w in self._words:
-					self._words[w]+=1;
-				else: self._words[w]=1;
-		return self._words;
-
-
-	def outdegree():
-		def fget(self):
-			return self._odeg;
-
-		def fset(self, odeg):
-			self._odeg=odeg;
-
-		return locals();
-
-	outdegree=property(**outdegree());
-
-	def __str__(self):
-		s="url: "+self.url;
-		s+="\ndomain: "+self.domain;
-		s+="\nindegree: "+str(self.indegree);
-		s+="\noutdegree: "+str(self.outdegree);
-		return s;
-
-def visitpage(con, l, links, newpage, errlist):
-
-	pages=con.crawldb.pages;
+	l=links.pop(0);
 	try:
-		if pages.find_one({'_url':l}):
-			pages.update({'_url':l}, {'$inc':{'_ideg':1}});
-	except errors.AutoReconnect as e:
-		errlist.append((time.ctime(), e));
+		pages=con.crawldb.pages;
 
-	else:
-		try:
-			s=site(l).__dict__;
+		if not pages.find_one({'_url':l}):
+			s=site(l);
 			pagelinks=linkfinder.findall(s['_page']);
-			s['_outdegree']=len(pagelinks);
-			s['_indegree']=1;
 			pages.insert(s);
+			links+=filter(lambda x: x != l, pagelinks);
 
-			for link in pagelinks:
-				if not pages.find_one({'_url': link}):
-					links.put(link);
+	except Exception as e:
+		errlist.append((time.ctime()+' '+l, e));
 
-			newpage.put(l);
-
-		except Exception as e:
-			errlist.append((time.ctime()+' '+l, e)); 
-
-def crawl(con, links, newpage, errlist, start=time.time()):
+def crawl(con, links, errlist, start=time.time()):
+	count=con.crawldb.pages.count;
+	lastcount=startcount=count();
 	i=0;
-	while (newpage.qsize() < MinPages) and ((time.time() - start) < TimeLimit):
+	while ((count() - startcount) < MinPages) and ((time.time() - start) < TimeLimit):
 		if len(active_children()) - 1 < MaxChildren:
-			try:
-				link=links.get(False);
-				Process(name="visitor-"+str(i), target=visitpage, 
-							args=(con, link, links, newpage, errlist)).start();
-				i+=1;
-			except Exception as e:
-				errlist.append((time.ctime(), e));
+			Process(name="visitor-"+str(i), target=visitpage, 
+						args=(con, links, errlist)).start();
+			i+=1;
+
+		if count() > lastcount:
+			lastcount=count();
+			print 'at {0} new pages'.format(lastcount-startcount);
 
 	print 'done crawling';
 
 	for child in active_children():
 		if re.match("visitor", child.name):
-			child.join();
+			child.terminate();
 
 	print 'done cleanup';
+	return count()-startcount;
 
 if __name__ == '__main__':
 
 	manager=Manager();
-	links=manager.Queue();
+	links=manager.list();
 	errlist=manager.list();
-	newpage=manager.Queue();
 
 	with open('seeds') as f:
 		for line in f:
-			links.put(line.strip());
+			links.append(line.strip());
 
 	con=Connection();
 	crawlStart=time.time();
-	crawl(con, links, newpage, errlist);
+	addcount=crawl(con, links, errlist);
 	crawlEnd=time.time();
 
 	with open('seeds', 'w') as f:
-		while links.qsize() > 0:
-			f.write(links.get()+'\n');
+		for link in links:
+			f.write(link+'\n');
 
 	if len(errlist) > 0:
 		with open('error.log', 'a') as f:
 			for e in errlist:
 				f.write('[{0}] {1}\n'.format(*e));
 
-	print "crawled {0} pages in {1} seconds".format(newpage.qsize(), crawlEnd-crawlStart);
+	print "crawled {0} pages in {1} seconds".format(addcount, crawlEnd-crawlStart);
 	print "the database now contains {0} sites".format(con.crawldb.pages.find().count());
 	con.disconnect();
