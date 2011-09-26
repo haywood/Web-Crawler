@@ -50,22 +50,27 @@ def unescape(text):
     return re.sub("&#?\w+", fixup, text)
 
 def site(url):
-	return {'_url':url, '_page':unescape(urlopen(url).read())}
+	return {'_url':url, 
+			'_page':unescape(urlopen(url).read()), 
+			'_inbound':list(),
+			}
 
 def visit(link, links, errlist):
 
 	con=Connection()
 	pages=con.crawldb.pages
 	try:
-		if not pages.find_one({'_url':link}):
-			s=site(link)
+		if not pages.find_one({'_url':link[1]}):
+			s=site(link[1])
 			pagelinks=linkfinder.findall(s['_page'])
+			s['_outbound']=filter(lambda x: x != link[1], pagelinks)
+			links+=[(link[1], l) for l in s['_outbound']]
+			if link[0]: s['_inbound'].append(link[0]);
 			pages.insert(s)
-			links+=filter(lambda x: x != link, pagelinks)
 		return True
 
 	except Exception as e:
-		errlist.append((time.ctime()+' '+link, e))
+		errlist.append((time.ctime()+' '+link[1], e))
 		return False
 
 def elapsed(s):
@@ -74,7 +79,7 @@ def elapsed(s):
 def readlinks(links):
 	with open('seeds') as f:
 		for line in f:
-			links.append(line.strip())
+			links.append(eval(line))
 
 	if len(links) == 0:
 		print 'error empty seed file'
@@ -84,7 +89,7 @@ def writelinks(links):
 	if len(links) > 0:
 		with open('seeds', 'w') as f:
 			for link in links:
-				try: f.write(link+'\n')
+				try: f.write(str(link)+'\n')
 				except: pass
 
 def logerrors(errlist):
@@ -117,7 +122,7 @@ def crawl(start=time.time()):
 			link=links.pop(0)
 			results.append((link, visitpage(pool, link, links, errlist)))
 
-		while len(results) >= MinPages:
+		while len(results) >= MaxChildren:
 			i=0
 			while i < len(results) and len(results) > 0: 
 				l, r=results[i]
