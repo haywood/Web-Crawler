@@ -1,26 +1,26 @@
 #!/usr/bin/python
 
-from multiprocessing import *;
-from urlparse import urlparse;
-from urllib import urlopen;
-from pymongo import *;
-import htmlentitydefs;
-import pickle;
-import time;
-import sys;
-import re;
+from multiprocessing import *
+from urlparse import urlparse
+from urllib import urlopen
+from pymongo import *
+import htmlentitydefs
+import pickle
+import time
+import sys
+import re
 
-linkfinder=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I);
-wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I);
-tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S);
+linkfinder=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I)
+wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I)
+tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S)
 
 if len(sys.argv) < 4 or len(sys.argv) > 4:
-	print 'usage: {0} pages children timelimit'.format(sys.argv[0]);
-	sys.exit(0);
+	print 'usage: {0} pages children timelimit'.format(sys.argv[0])
+	sys.exit(0)
 
-MinPages=int(sys.argv[1]);
-MaxChildren=int(sys.argv[2]);
-TimeLimit=int(sys.argv[3]);
+MinPages=int(sys.argv[1])
+MaxChildren=int(sys.argv[2])
+TimeLimit=int(sys.argv[3])
 
 ##
 # Removes HTML or XML character references and entities from a text string.
@@ -47,76 +47,102 @@ def unescape(text):
             except KeyError:
                 pass
         return text # leave as is
-    return re.sub("&#?\w+;", fixup, text)
+    return re.sub("&#?\w+", fixup, text)
 
 def site(url):
-	return {'_url':url, '_page':unescape(urlopen(url).read())};
+	return {'_url':url, '_page':unescape(urlopen(url).read())}
 
-def visitpage(con, links, errlist):
+def visit(link, links, errlist):
 
-	if len(links) == 0:
-		return;
-
-	l=links.pop(0);
+	con=Connection()
+	pages=con.crawldb.pages
 	try:
-		pages=con.crawldb.pages;
-
-		if not pages.find_one({'_url':l}):
-			s=site(l);
-			pagelinks=linkfinder.findall(s['_page']);
-			pages.insert(s);
-			links+=filter(lambda x: x != l, pagelinks);
+		if not pages.find_one({'_url':link}):
+			s=site(link)
+			pagelinks=linkfinder.findall(s['_page'])
+			pages.insert(s)
+			links+=filter(lambda x: x != link, pagelinks)
+		return True
 
 	except Exception as e:
-		errlist.append((time.ctime()+' '+l, e));
+		errlist.append((time.ctime()+' '+link, e))
+		return False
 
-def crawl(con, links, errlist, start=time.time()):
-	count=con.crawldb.pages.count;
-	lastcount=startcount=count();
-	i=0;
-	while ((count() - startcount) < MinPages) and ((time.time() - start) < TimeLimit):
-		if len(active_children()) - 1 < MaxChildren:
-			Process(name="visitor-"+str(i), target=visitpage, 
-						args=(con, links, errlist)).start();
-			i+=1;
+def elapsed(s):
+	return time.time()-s
 
-		if count() > lastcount:
-			lastcount=count();
-			print 'at {0} new pages'.format(lastcount-startcount);
-
-	print 'done crawling';
-
-	for child in active_children():
-		if re.match("visitor", child.name):
-			child.terminate();
-
-	print 'done cleanup';
-	return count()-startcount;
-
-if __name__ == '__main__':
-
-	manager=Manager();
-	links=manager.list();
-	errlist=manager.list();
-
+def readlinks(links):
 	with open('seeds') as f:
 		for line in f:
-			links.append(line.strip());
+			links.append(line.strip())
 
-	con=Connection();
-	crawlStart=time.time();
-	addcount=crawl(con, links, errlist);
-	crawlEnd=time.time();
+	if len(links) == 0:
+		print 'error empty seed file'
+		sys.exit(1)
 
-	with open('seeds', 'w') as f:
-		for link in links:
-			f.write(link+'\n');
+def writelinks(links):
+	if len(links) > 0:
+		with open('seeds', 'w') as f:
+			for link in links:
+				try: f.write(link+'\n')
+				except: pass
 
+def logerrors(errlist):
 	if len(errlist) > 0:
 		with open('error.log', 'a') as f:
 			for e in errlist:
-				f.write('[{0}] {1}\n'.format(*e));
+				try: f.write('[{0}] {1}\n'.format(*e))
+				except: pass
 
-	print "crawled {0} pages in {1} seconds".format(addcount, crawlEnd-crawlStart);
-	print "the database now contains {0} sites".format(con.crawldb.pages.find().count());
-	con.disconnect();
+def visitpage(pool, link, links, errlist):
+	return pool.apply_async(visit, (link, links, errlist))
+
+def crawl(start=time.time()):
+	con=Connection()
+	pages=con.crawldb.pages
+	lastcount=startcount=pages.count()
+	manager=Manager()
+	links=manager.list()
+	errlist=manager.list()
+	results=[]
+	newpages=0
+
+	readlinks(links)
+
+	pool=Pool(processes=MaxChildren)
+
+	while (newpages < MinPages) and (elapsed(start) < TimeLimit):
+
+		if len(links) > 0:
+			link=links.pop(0)
+			results.append((link, visitpage(pool, link, links, errlist)))
+
+		while len(results) >= MinPages:
+			i=0
+			while i < len(results) and len(results) > 0: 
+				l, r=results[i]
+				r.wait(0.01)
+				if r.ready(): 
+					results.pop(i)
+					if r.get() == False:
+						links.append(l)
+				else: i+=1
+
+		if pages.count() > lastcount:
+			lastcount=pages.count()
+			newpages=lastcount-startcount
+
+	print 'done crawling'
+	pool.close()
+	pool.join()
+	print 'done cleanup'
+
+	writelinks(links)
+	logerrors(errlist)
+
+	print "crawled {0} pages in {1} seconds".format(newpages, elapsed(start))
+	print "the database now contains {0} sites".format(pages.count())
+	con.disconnect()
+
+if __name__ == '__main__':
+	crawl()
