@@ -148,13 +148,14 @@ def crawl(start=time.time()):
 	pool.terminate()
 	pool.join()
 	print 'done cleanup'
-
-	writelinks(links)
-	logerrors(errlist)
+	con.disconnect()
 
 	print "crawled {0} pages in {1} seconds".format(newpages, elapsed(start))
 	print "the database now contains {0} sites".format(pages.count())
-	con.disconnect()
+	print 'writing links and logging errors'
+
+	writelinks(links)
+	logerrors(errlist)
 
 if __name__ == '__main__':
 	crawl()
