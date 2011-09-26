@@ -51,8 +51,7 @@ def unescape(text):
 
 def site(url):
 	return {'_url':url, 
-			'_page':unescape(urlopen(url).read()), 
-			'_inbound':list(),
+			'_page':unescape(urlopen(url).read())
 			}
 
 def visit(link, links, errlist):
@@ -60,7 +59,10 @@ def visit(link, links, errlist):
 	con=Connection()
 	pages=con.crawldb.pages
 	try:
-		if not pages.find_one({'_url':link[1]}):
+		if pages.find_one({'_url':link[1]}):
+			pages.udate({'_url':link[1]}, {'$addToSet': {'_inbound':link[0]}})
+
+		else:
 			s=site(link[1])
 			pagelinks=linkfinder.findall(s['_page'])
 			s['_outbound']=filter(lambda x: x != link[1], pagelinks)
