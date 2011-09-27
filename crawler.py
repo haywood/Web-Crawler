@@ -93,20 +93,22 @@ def crawl(start=time.time()):
 			lastcount=pages.count()
 			newpages=lastcount-startcount
 
-	print 'done crawling'
+	print "crawled {0} pages in {1} seconds".format(newpages, elapsed(start))
 	pool.terminate()
 	pool.join()
 	print 'done cleanup'
 
+	print 'saving links'
 	while True:
 		try: 
 			db.links.insert(links, safe=True)
 			break
 		except errors.AutoReconnect: pass
 	con.disconnect()
+	print 'finished saving links'
 
-	print "crawled {0} pages in {1} seconds".format(newpages, elapsed(start))
-	print "the database now contains {0} sites".format(pages.count())
+	print 'the database now contains {0} sites'.format(pages.count())
+	print 'the frontier is {1} links'.format(db.links.count())
 
 if __name__ == '__main__':
 	crawl()
