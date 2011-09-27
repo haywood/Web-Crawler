@@ -74,6 +74,9 @@ def crawl(start=time.time()):
 	newpages=0
 	results=[]
 
+	if db.links.count() == 0:
+		raise ValueError('frontier is empty')
+
 	for l in db.links.find():
 		links.append(l)
 	db.links.remove()
@@ -95,9 +98,12 @@ def crawl(start=time.time()):
 	pool.join()
 	print 'done cleanup'
 
-	try: db.links.insert(links)
-	except errors.AutoReconnect: pass
-	finally: con.disconnect()
+	while True:
+		try: 
+			db.links.insert(links, safe=True)
+			break
+		except errors.AutoReconnect: pass
+	con.disconnect()
 
 	print "crawled {0} pages in {1} seconds".format(newpages, elapsed(start))
 	print "the database now contains {0} sites".format(pages.count())
