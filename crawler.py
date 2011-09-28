@@ -4,12 +4,13 @@ from multiprocessing import *
 from urlparse import urlparse
 from urllib import urlopen
 from pymongo import *
+from pymongo.code import Code
 import pickle
 import time
 import sys
 import re
 
-linkfinder=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I)
+lfind=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I)
 wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I)
 tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S)
 
@@ -22,14 +23,17 @@ MaxChildren=int(sys.argv[2])
 TimeLimit=int(sys.argv[3])
 
 def site(url):
-	return {'_url':url, '_page':unicode(urlopen(url).read(), 'utf-8')}
+	return {'_url':url, 
+				'_page':unicode(urlopen(url).read(), 'utf-8'),
+				'_visited':False
+			}
 
 def link(to, frm):
 	return {'_to':to, '_from':frm}
 
 def successors(s):
-	pagelinks=linkfinder.findall(s['_page'])
-	s['_outbound']=[x for x in pagelinks if x != s['_url']]
+	ls=[x for x in lfind.findall(s['_page']) if x != s['_url']]
+	s['_outbound']=[{'_url':l, '_visited':False} for l in ls]
 	return len(s['_outbound'])
 
 def visit(l, links):
@@ -49,16 +53,23 @@ def visit(l, links):
 			pages.insert(s)
 
 			if len(s['_outbound']) > 0:
-				links+=[link(o, s['_url']) for o in s['_outbound']]
+				links+=[link(o['_url'], s['_url']) for o in s['_outbound']]
 
-		return True
-
-	except UnicodeDecodeError as ude:
-		pass
-		#print ude
+		frm=pages.find_one({'_url':l['_from']})
+		for x in frm['_outbound']:
+			if x['_url'] == [l['_to']]:
+				x['_visited'] = True
+		pages.save(frm)
 
 	except Exception as e:
 		pass
+
+def savelink(l):
+	links=Connection().crawldb.links
+	try:
+		if not links.find_one(l):
+			links.insert(l)
+	except: pass
 
 def elapsed(s):
 	return time.time()-s
@@ -72,14 +83,28 @@ def crawl(start=time.time()):
 	links=manager.list()
 	lastcount=startcount=pages.count()
 	newpages=0
-	results=[]
 
-	if db.links.count() == 0:
-		raise ValueError('frontier is empty')
+	if pages.count() == 0:
+		links.append(link('http://www.cnn.com', ''))
 
-	for l in db.links.find():
-		links.append(l)
-	db.links.remove()
+	else:
+		m=Code("function () {"
+					"	for (var i=0; i < this._outbound.length; ++i) {"
+					"		x=this._outbound[i];"
+					"		if (i+1 == this._outbound.length) {"
+					"			this._visited=true;"
+					"		}"
+					"		if (!x['_visited']) {"
+					"			emit(this._url, x['_url']);"
+					"			break;"
+					"		}"
+					"	}"
+					"}")
+		r=Code("function (key, values) {"
+					"	return values[0];"
+					"}")
+		res=pages.map_reduce(m, r, {'merge':'links'}, query={"_visited" : False})
+		for r in res.find(): links.append(link(r['value'], r['_id']))
 
 	pool=Pool(processes=MaxChildren)
 
@@ -87,28 +112,20 @@ def crawl(start=time.time()):
 
 		if len(links) > 0:
 			l=links.pop(0)
-			results.append(pool.apply_async(visit, (l, links,)))
-		
+			pool.apply_async(visit, (l, links))
+
 		if pages.count() > lastcount:
 			lastcount=pages.count()
 			newpages=lastcount-startcount
 
 	print "crawled {0} pages in {1} seconds".format(newpages, elapsed(start))
+	print 'the database now contains {0} sites'.format(pages.count())
+	print 'joining'
 	pool.terminate()
 	pool.join()
-	print 'done cleanup'
 
-	print 'saving links'
-	while True:
-		try: 
-			db.links.insert(links, safe=True)
-			break
-		except errors.AutoReconnect: pass
 	con.disconnect()
-	print 'finished saving links'
-
-	print 'the database now contains {0} sites'.format(pages.count())
-	print 'the frontier is {1} links'.format(db.links.count())
+	print 'exiting...'
 
 if __name__ == '__main__':
 	crawl()
