@@ -5,14 +5,13 @@ from urlparse import urlparse
 from urllib import urlopen
 from pymongo import *
 from pymongo.code import Code
-import pickle
 import time
 import sys
 import re
 
 lfind=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I)
-wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I)
-tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S)
+wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I).finditer
+tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S).sub
 
 if len(sys.argv) < 4 or len(sys.argv) > 4:
 	print 'usage: {0} pages children timelimit'.format(sys.argv[0])
@@ -50,6 +49,20 @@ def visit(l, links):
 
 			if l['_from']: s['_inbound']=[l['_from']]
 			successors(s)
+			text=tagkiller(' ', s['_page'])
+			if text:
+				words=con.crawldb.words
+				s['_words']={}
+				for w in wordfinder(text):
+					if w in s['_words']:
+						s['_words'][w]+=1
+					else: s['_word'][w]=1
+
+					t=words.find_one({'_word':w})
+					if t:
+						t['_count']+=1
+						words.save(t)
+					else: words.insert({'_word':w, '_count':1})
 			pages.insert(s)
 
 			if len(s['_outbound']) > 0:
@@ -74,7 +87,7 @@ def savelink(l):
 def elapsed(s):
 	return time.time()-s
 
-def crawl(start=time.time()):
+def crawl():
 
 	manager=Manager()
 	con=Connection()
@@ -104,9 +117,12 @@ def crawl(start=time.time()):
 					"	return values[0];"
 					"}")
 		res=pages.map_reduce(m, r, {'merge':'links'}, query={"_visited" : False})
-		for r in res.find(): links.append(link(r['value'], r['_id']))
+		for r in res.find(): 
+			links.append(link(r['value'], r['_id']))
+			print r['_id'], '->', r['value']
 
 	pool=Pool(processes=MaxChildren)
+	start=time.time()
 
 	while (newpages < MinPages) and (elapsed(start) < TimeLimit):
 
