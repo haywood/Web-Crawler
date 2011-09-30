@@ -124,12 +124,13 @@ def crawl():
 			lastcount=pages.count()
 			newpages=lastcount-startcount
 
-	print "crawled {0} pages in {1} seconds with {2} wasted links".format(newpages, elapsed(start), i-newpages)
-	print 'the database now contains {0} sites'.format(pages.count())
 	print 'joining'
 	pool.terminate()
 	pool.join()
 
+	newpages=pages.count()-startcount
+	print "crawled {0} pages in {1} seconds with {2} wasted links".format(newpages, elapsed(start), i-newpages)
+	print 'the database now contains {0} sites'.format(pages.count())
 	con.disconnect()
 	print 'exiting...'
 
