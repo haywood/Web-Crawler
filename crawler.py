@@ -10,8 +10,6 @@ import sys
 import re
 
 lfind=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I)
-wordfinder=re.compile("([a-z]+)('[a-z])?", flags=re.I).finditer
-tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S).sub
 
 if len(sys.argv) < 4 or len(sys.argv) > 4:
 	print 'usage: {0} pages children timelimit'.format(sys.argv[0])
@@ -24,7 +22,8 @@ TimeLimit=int(sys.argv[3])
 def site(url):
 	return {'_url':url, 
 				'_page':unicode(urlopen(url).read(), 'utf-8'),
-				'_visited':False
+				'_visited':False,
+				'_words':False
 			}
 
 def link(to, frm):
@@ -41,7 +40,7 @@ def visit(l, links):
 	pages=con.crawldb.pages
 
 	try:
-		if pages.find_one({'_url':l['_to']}):
+		if pages.find_one({'_url':l['_to']}) and l['_from']:
 			pages.update({'_url':l['_to']}, {'$addToSet': {'_inbound':l['_from']}})
 
 		else:
@@ -49,40 +48,22 @@ def visit(l, links):
 
 			if l['_from']: s['_inbound']=[l['_from']]
 			successors(s)
-			text=tagkiller(' ', s['_page'])
-			if text:
-				words=con.crawldb.words
-				s['_words']={}
-				for w in wordfinder(text):
-					if w in s['_words']:
-						s['_words'][w]+=1
-					else: s['_word'][w]=1
-
-					t=words.find_one({'_word':w})
-					if t:
-						t['_count']+=1
-						words.save(t)
-					else: words.insert({'_word':w, '_count':1})
 			pages.insert(s)
 
 			if len(s['_outbound']) > 0:
 				links+=[link(o['_url'], s['_url']) for o in s['_outbound']]
 
-		frm=pages.find_one({'_url':l['_from']})
-		for x in frm['_outbound']:
-			if x['_url'] == [l['_to']]:
-				x['_visited'] = True
-		pages.save(frm)
+		if l['_from']:
+			frm=pages.find_one({'_url':l['_from']})
+			if frm:
+				for x in frm['_outbound']:
+					if x['_url'] == [l['_to']]:
+						x['_visited'] = True
+						break
+				pages.save(frm)
 
 	except Exception as e:
 		pass
-
-def savelink(l):
-	links=Connection().crawldb.links
-	try:
-		if not links.find_one(l):
-			links.insert(l)
-	except: pass
 
 def elapsed(s):
 	return time.time()-s
@@ -117,24 +98,33 @@ def crawl():
 					"	return values[0];"
 					"}")
 		res=pages.map_reduce(m, r, {'merge':'links'}, query={"_visited" : False})
-		for r in res.find(): 
-			links.append(link(r['value'], r['_id']))
-			print r['_id'], '->', r['value']
+		for r in res.find(): links.append(link(r['value'], r['_id']))
 
 	pool=Pool(processes=MaxChildren)
 	start=time.time()
+	results=[]
+	i=0
 
 	while (newpages < MinPages) and (elapsed(start) < TimeLimit):
 
 		if len(links) > 0:
 			l=links.pop(0)
-			pool.apply_async(visit, (l, links))
+			i+=1
+			results.append(pool.apply_async(visit, (l, links)))
+
+		if len(results) > MinPages:
+			j=0
+			while j < len(results):
+				results[j].wait(0.01)
+				if results[j].ready():
+					results.pop(j)
+				else: j+=1
 
 		if pages.count() > lastcount:
 			lastcount=pages.count()
 			newpages=lastcount-startcount
 
-	print "crawled {0} pages in {1} seconds".format(newpages, elapsed(start))
+	print "crawled {0} pages in {1} seconds with {2} wasted links".format(newpages, elapsed(start), i-newpages)
 	print 'the database now contains {0} sites'.format(pages.count())
 	print 'joining'
 	pool.terminate()
