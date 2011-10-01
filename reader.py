@@ -9,60 +9,49 @@ import time
 import sys
 import re
 
-wordfinder=re.compile("[a-z]+", flags=re.I).finditer
-tagkiller=re.compile("(<style.*?</style>)|(<script.*?</script>)|(<noscript.*?</noscript>)|(<.*?>)", flags=re.S).sub
-
-MaxChildren=10
-MaxPages=100
-
-def visit(s):
-	try:
-		con=Connection()
-		pages=con.crawldb.pages
-		text=tagkiller(' ', s['_page'])
-		if text:
-			s['_words']={}
-			for w in wordfinder(text):
-				w=w.group(0).lower()
-				if w in s['_words']:
-					s['_words'][w]+=1
-				else: s['_words'][w]=1
-
-			words=con.crawldb.words
-			for w, c in s['_words'].iteritems():
-				if words.find_one({'_word':w}):
-					words.update({'_word':w}, {'$inc': {'_count': c}})
-				else: words.insert({'_word':w, '_count':c})
-			pages.save(s)
-	except Exception as e:
-		print e
-
 if __name__ == '__main__':
 	con=Connection()
-	pages=con.crawldb.pages
-
+	db=con.crawldb
+	pages=db.pages
 	if pages.count() == 0:
-		sys.exit(0)
+		print 'there are no pages to read!'
+		sys.exit(1)
 
-	extr=pages.find({'_words': {'$ne': False}}).count()
-	print 'so far {0}% of the database has had words extracted'.format(100*float(extr)/pages.count())
-	pool=Pool(processes=MaxChildren)
-	start=time.time()
-	results=[]
-	for p in pages.find({'_words':False}, limit=MaxPages):
+	m=Code("function() {"
+			+"	var wfind=/[a-z]+/gi;"
+			+" var wordlist=this._page.match(wfind);"
+			+"	if (wordlist) {"
+			+"		words={};"
+			+"		wordlist.forEach(function (word) {"
+			+"			word=word.toLowerCase();"
+			+"			if (word in words) { words[word]++; }"
+			+"			else { words[word]=1; }"
+			+"		});"
+			+"		this._words=words;"
+			+"		emit(this._url, words);"
+			+"	}"
+			+"	else { emit(this._url, {}); }"
+			"}");
+	r=Code("function(key, values) { return values[0]; }")
+	mr=pages.map_reduce(m, r, {'inline':1}, query={'_words':False})
+	for r in mr['results']: 
+		if len(r['value']) > 0:
+			pages.update({'_url': r['_id']}, {'$set': {'_words': r['value']}})
+	print 'updated {0} pages'.format(len(mr['results']))
+	print 'done updating pages; updating words'
 
-		results.append(pool.apply_async(visit, (p,)))
+#	Map Reduce code would probably run faster if my laptop were not running the database...
 
-		if len(results) > MaxChildren:
-			j=0
-			while j < len(results):
-				results[j].wait(0.01)
-				if results[j].ready():
-					results.pop(j)
-				else: j+=1
+	m=Code("function () { for (w in this._words) { emit(w, this._words[w]); } }")
+	r=Code("function (key, values) {"
+			+"	var total=0;"
+			+"	for (var i=0; i < values.length; ++i) {"
+			+"		total += values[i];"
+			+"	}"
+			+"	return total;"
+			+"}")
+	db.pages.map_reduce(m, r, {'reduce':'words'}, 
+			query={'_words': {'$ne': False}, '_wordsAdded': False})
 
-	pool.close()
-	pool.join()
-	extr=pages.find({'_words': {'$ne': False}}).count()
-	print 'now {0}% of the database has had words extracted'.format(100*float(extr)/pages.count())
-	print 'took {0} seconds'.format(time.time()-start)
+	db.pages.update({'_words': {'$ne': False}, '_wordsAdded': False},
+			{'$set': {'_wordsAdded': True}}, multi=True)

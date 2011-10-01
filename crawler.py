@@ -1,36 +1,46 @@
 #!/usr/bin/python
 
+from htmlentitydefs import entitydefs, name2codepoint
 from multiprocessing import *
+from pymongo.code import Code
 from urlparse import urlparse
 from urllib import urlopen
 from pymongo import *
-from pymongo.code import Code
 import time
 import sys
 import re
 
-lfind=re.compile("<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I)
+lfind=re.compile(r"<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I).findall
+tkill=re.compile(r"<(style|(no)?script).*?>.*?</\1>|<.*?>|\s+", flags=re.S).sub
+ekill=re.compile(r"&\S+?;").sub
 
-if len(sys.argv) < 4 or len(sys.argv) > 4:
-	print 'usage: {0} pages children timelimit'.format(sys.argv[0])
-	sys.exit(0)
-
-MinPages=int(sys.argv[1])
-MaxChildren=int(sys.argv[2])
-TimeLimit=int(sys.argv[3])
+def entityrepl(match):
+	text=match.group(0);
+	if len(text) == 1:
+		raise ValueError('text too short in entityrepl: {0}'.format(text))
+	elif text[1] == '#':
+		if text[2] == 'x': 
+			return unichr(int(text[3:-1], 16))
+		else: return unichr(int(text[2:-1]))
+	elif text[1:-1] in entitydefs:
+		u= entitydefs[text[1:-1]]
+		if u[:2] == '&#': return ' '
+		return u
+	else: raise ValueError('text is not a valide html entity: {0}'.format(text))
 
 def site(url):
 	return {'_url':url, 
 				'_page':unicode(urlopen(url).read(), 'utf-8'),
 				'_visited':False,
-				'_words':False
+				'_words':False,
+				'_wordsAdded':False
 			}
 
 def link(to, frm):
 	return {'_to':to, '_from':frm}
 
 def successors(s):
-	ls=[x for x in lfind.findall(s['_page']) if x != s['_url']]
+	ls=[x for x in lfind(s['_page']) if x != s['_url']]
 	s['_outbound']=[{'_url':l, '_visited':False} for l in ls]
 	return len(s['_outbound'])
 
@@ -48,6 +58,8 @@ def visit(l, links):
 
 			if l['_from']: s['_inbound']=[l['_from']]
 			successors(s)
+			s['_page']=tkill(' ', s['_page'])
+			s['_page']=ekill(entityrepl, s['_page'])
 			pages.insert(s)
 
 			if len(s['_outbound']) > 0:
@@ -56,7 +68,10 @@ def visit(l, links):
 		if l['_from']:
 			frm=pages.find_one({'_url':l['_from']})
 			if frm:
-				for x in frm['_outbound']:
+				for i in range(len(frm['_outbound'])):
+					x=frm['_outbound'][i]
+					if i+1 == len(frm['_outbound']):
+						frm['_visited']=True
 					if x['_url'] == [l['_to']]:
 						x['_visited'] = True
 						break
@@ -70,6 +85,14 @@ def elapsed(s):
 
 def crawl():
 
+	if len(sys.argv) < 4 or len(sys.argv) > 4:
+		print 'usage: {0} pages children timelimit'.format(sys.argv[0])
+		sys.exit(0)
+
+	MinPages=int(sys.argv[1])
+	MaxChildren=int(sys.argv[2])
+	TimeLimit=int(sys.argv[3])
+
 	manager=Manager()
 	con=Connection()
 	db=con.crawldb
@@ -79,15 +102,14 @@ def crawl():
 	newpages=0
 
 	if pages.count() == 0:
-		links.append(link('http://www.cnn.com', ''))
+		links.append(link('http://www.google.com/news', ''))
+		links.append(link('http://www.cnn.com/', ''))
+		links.append(link('http://www.example.com', ''))
 
 	else:
 		m=Code("function () {"
 					"	for (var i=0; i < this._outbound.length; ++i) {"
 					"		x=this._outbound[i];"
-					"		if (i+1 == this._outbound.length) {"
-					"			this._visited=true;"
-					"		}"
 					"		if (!x['_visited']) {"
 					"			emit(this._url, x['_url']);"
 					"			break;"
@@ -97,8 +119,8 @@ def crawl():
 		r=Code("function (key, values) {"
 					"	return values[0];"
 					"}")
-		res=pages.map_reduce(m, r, {'merge':'links'}, query={"_visited" : False})
-		for r in res.find(): links.append(link(r['value'], r['_id']))
+		mr=pages.map_reduce(m, r, {'inline':1}, query={"_visited" : False})
+		for r in mr['results']: links.append(link(r['value'], r['_id']))
 
 	pool=Pool(processes=MaxChildren)
 	start=time.time()
