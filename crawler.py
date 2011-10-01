@@ -48,7 +48,7 @@ def successors(s):
 	s['_outbound']=[{'_url':l, '_visited':False} for l in ls]
 	return len(s['_outbound'])
 
-def visit(l, links):
+def visit(l, links, fails):
 
 	con=Connection()
 	pages=con.crawldb.pages
@@ -59,7 +59,7 @@ def visit(l, links):
 	else:
 		try: s=site(l['_to'])
 		except (UnicodeDecodeError, IOError) as e:
-			print e, l
+			fails.append((e, l))
 			return
 
 		if l['_from']: 
@@ -69,7 +69,7 @@ def visit(l, links):
 		try:
 			s['_page']=ekill(entityrepl, s['_page'])
 		except Exception as e:
-			print e, l
+			fails.append((e, l))
 			return
 		pages.insert(s)
 
@@ -106,6 +106,7 @@ def crawl():
 	con=Connection()
 	db=con.crawldb
 	pages=db.pages
+	fails=manager.list()
 	links=manager.list()
 	lastcount=startcount=pages.count()
 	newpages=0
@@ -141,7 +142,7 @@ def crawl():
 		if len(links) > 0:
 			l=links.pop(0)
 			i+=1
-			results.append(pool.apply_async(visit, (l, links)))
+			results.append(pool.apply_async(visit, (l, links, fails)))
 
 		if len(results) > MinPages:
 			j=0
@@ -163,6 +164,10 @@ def crawl():
 	print "crawled {0} pages in {1} seconds with {2} wasted links".format(newpages, elapsed(start), i-newpages)
 	print 'the database now contains {0} sites'.format(pages.count())
 	con.disconnect()
+	if fails:
+		print 'listing failures'
+		for fail in list(fails):
+			print fail
 	print 'exiting...'
 
 if __name__ == '__main__':
