@@ -27,7 +27,6 @@ if __name__ == '__main__':
 			+"			if (word in words) { words[word]++; }"
 			+"			else { words[word]=1; }"
 			+"		});"
-			+"		this._words=words;"
 			+"		emit(this._url, words);"
 			+"	}"
 			+"	else { emit(this._url, {}); }"

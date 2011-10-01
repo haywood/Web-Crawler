@@ -1,6 +1,6 @@
 #!/usr/bin/python
 
-from htmlentitydefs import entitydefs, name2codepoint
+from htmlentitydefs import entitydefs
 from multiprocessing import *
 from pymongo.code import Code
 from urlparse import urlparse
@@ -10,33 +10,35 @@ import time
 import sys
 import re
 
-lfind=re.compile(r"<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I).findall
+lfind=re.compile(r"<a href=.?(http://[^ >'\"]+)[^>]*>").findall
 tkill=re.compile(r"<!?--.*?-->|<(style|(no)?script).*?>.*?</\1>|<.*?>|\s+", flags=re.S).sub
-ekill=re.compile(r"&[^&]+?;").sub
+ekill=re.compile(r"&[a-z0-9]+?;").sub
+
+entitydefs['apos']="'"
 
 def entityrepl(match):
 	text=match.group(0);
-	try:
-		if text[1] == '#':
-			if text[2] == 'x': return unichr(int(text[3:-1], 16))
-			else: return unichr(int(text[2:-1]))
-		elif text[1:-1] in entitydefs:
-			u=entitydefs[text[1:-1]]
-			if u[:2] == '&#': # if entitydefs says ordinal too high
-				c=int(text[1:-1])
-				if c > 255: return unichr(c, 16)
-				elif c > 127: return unichr(c)
-			return u
-		return ' '
-	except: return ' '
+	hex=re.search('x[a-f\d]+', text)
+	dec=re.search('\d+', text)
+	c=' '
+	if hex: c=unichr(int(hex.group(0), 16))
+	elif dec: c=unichr(int(dec.group(0)))
+	else: 
+		if text[1:-1] in entitydefs:
+			c=entitydefs[text[1:-1]]
+		else:
+			print 'unrecognized html entity', text
+			c=' '
+	try: c.encode('utf-8')
+	except: c=' '
+	return c
 
 def site(url):
-	return {'_url':url, 
-				'_page':unicode(urlopen(url).read(), 'utf-8'),
-				'_visited':False,
-				'_words':False,
-				'_wordsAdded':False
-			}
+
+	p=urlopen(url).read()
+	s={'_url':url, '_visited':False, '_words':False, '_wordsAdded':False}
+	s['_page']=unicode(p, 'utf-8').lower()
+	return s
 
 def link(to, frm):
 	return {'_to':to, '_from':frm}
@@ -51,37 +53,41 @@ def visit(l, links):
 	con=Connection()
 	pages=con.crawldb.pages
 
-	try:
-		if pages.find_one({'_url':l['_to']}) and l['_from']:
-			pages.update({'_url':l['_to']}, {'$addToSet': {'_inbound':l['_from']}})
+	if pages.find_one({'_url':l['_to']}) and l['_from']:
+		pages.update({'_url':l['_to']}, {'$addToSet': {'_inbound':l['_from']}})
 
-		else:
-			s=site(l['_to'].encode('utf-8'))
+	else:
+		try: s=site(l['_to'])
+		except (UnicodeDecodeError, IOError) as e:
+			print e, l
+			return
 
-			if l['_from']: s['_inbound']=[l['_from']]
-			successors(s)
-			s['_page']=tkill(' ', s['_page'])
+		if l['_from']: 
+			s['_inbound']=[l['_from']]
+		successors(s)
+		s['_page']=tkill(' ', s['_page'])
+		try:
 			s['_page']=ekill(entityrepl, s['_page'])
-			pages.insert(s)
+		except Exception as e:
+			print e, l
+			return
+		pages.insert(s)
 
-			if len(s['_outbound']) > 0:
-				links+=[link(o['_url'], s['_url']) for o in s['_outbound']]
 
-		if l['_from']:
-			frm=pages.find_one({'_url':l['_from']})
-			if frm:
-				for i in range(len(frm['_outbound'])):
-					x=frm['_outbound'][i]
-					if i+1 == len(frm['_outbound']):
-						frm['_visited']=True
-					if x['_url'] == [l['_to']]:
-						x['_visited'] = True
-						break
-				pages.save(frm)
+		if len(s['_outbound']) > 0:
+			links+=[link(o['_url'], s['_url']) for o in s['_outbound']]
 
-	except Exception as e:
-		print e
-		pass
+	if l['_from']:
+		frm=pages.find_one({'_url':l['_from']})
+		if frm:
+			for i in range(len(frm['_outbound'])):
+				x=frm['_outbound'][i]
+				if i+1 == len(frm['_outbound']):
+					frm['_visited']=True
+				if x['_url'] == [l['_to']]:
+					x['_visited'] = True
+					break
+			pages.save(frm)
 
 def elapsed(s):
 	return time.time()-s
@@ -106,7 +112,8 @@ def crawl():
 
 	if pages.count() == 0:
 		links.append(link('http://www.google.com/news', ''))
-		links.append(link('http://www.cnn.com/', ''))
+		with open('links') as f:
+			for line in f: links.append(link(line.strip(), ''))
 
 	else:
 		m=Code("function () {"
@@ -127,9 +134,10 @@ def crawl():
 	pool=Pool(processes=MaxChildren)
 	start=time.time()
 	results=[]
+	n=len(links)
 	i=0
 
-	while (newpages < MinPages) and (elapsed(start) < TimeLimit):
+	while (newpages < n) and (elapsed(start) < TimeLimit):
 
 		if len(links) > 0:
 			l=links.pop(0)
