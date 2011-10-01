@@ -111,7 +111,6 @@ def crawl():
 	newpages=0
 
 	if pages.count() == 0:
-		links.append(link('http://www.google.com/news', ''))
 		with open('links') as f:
 			for line in f: links.append(link(line.strip(), ''))
 
