@@ -11,22 +11,24 @@ import sys
 import re
 
 lfind=re.compile(r"<a href=.?(http://[^ >'\"]+)[^>]*>", flags=re.I).findall
-tkill=re.compile(r"<(style|(no)?script).*?>.*?</\1>|<.*?>|\s+", flags=re.S).sub
-ekill=re.compile(r"&\S+?;").sub
+tkill=re.compile(r"<!?--.*?-->|<(style|(no)?script).*?>.*?</\1>|<.*?>|\s+", flags=re.S).sub
+ekill=re.compile(r"&[^&]+?;").sub
 
 def entityrepl(match):
 	text=match.group(0);
-	if len(text) == 1:
-		raise ValueError('text too short in entityrepl: {0}'.format(text))
-	elif text[1] == '#':
-		if text[2] == 'x': 
-			return unichr(int(text[3:-1], 16))
-		else: return unichr(int(text[2:-1]))
-	elif text[1:-1] in entitydefs:
-		u= entitydefs[text[1:-1]]
-		if u[:2] == '&#': return ' '
-		return u
-	else: raise ValueError('text is not a valide html entity: {0}'.format(text))
+	try:
+		if text[1] == '#':
+			if text[2] == 'x': return unichr(int(text[3:-1], 16))
+			else: return unichr(int(text[2:-1]))
+		elif text[1:-1] in entitydefs:
+			u=entitydefs[text[1:-1]]
+			if u[:2] == '&#': # if entitydefs says ordinal too high
+				c=int(text[1:-1])
+				if c > 255: return unichr(c, 16)
+				elif c > 127: return unichr(c)
+			return u
+		return ' '
+	except: return ' '
 
 def site(url):
 	return {'_url':url, 
@@ -78,6 +80,7 @@ def visit(l, links):
 				pages.save(frm)
 
 	except Exception as e:
+		print e
 		pass
 
 def elapsed(s):
@@ -104,7 +107,6 @@ def crawl():
 	if pages.count() == 0:
 		links.append(link('http://www.google.com/news', ''))
 		links.append(link('http://www.cnn.com/', ''))
-		links.append(link('http://www.example.com', ''))
 
 	else:
 		m=Code("function () {"
@@ -119,8 +121,8 @@ def crawl():
 		r=Code("function (key, values) {"
 					"	return values[0];"
 					"}")
-		mr=pages.map_reduce(m, r, {'inline':1}, query={"_visited" : False})
-		for r in mr['results']: links.append(link(r['value'], r['_id']))
+		mr=pages.map_reduce(m, r, {'replace':'__links'}, query={"_visited" : False})
+		for r in mr.find(): links.append(link(r['value'], r['_id']))
 
 	pool=Pool(processes=MaxChildren)
 	start=time.time()

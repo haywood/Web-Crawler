@@ -33,11 +33,11 @@ if __name__ == '__main__':
 			+"	else { emit(this._url, {}); }"
 			"}");
 	r=Code("function(key, values) { return values[0]; }")
-	mr=pages.map_reduce(m, r, {'inline':1}, query={'_words':False})
-	for r in mr['results']: 
+	mr=pages.map_reduce(m, r, {'replace':'__words'}, query={'_words':False})
+	for r in mr.find(): 
 		if len(r['value']) > 0:
 			pages.update({'_url': r['_id']}, {'$set': {'_words': r['value']}})
-	print 'updated {0} pages'.format(len(mr['results']))
+	print 'updated {0} pages'.format(mr.count())
 	print 'done updating pages; updating words'
 
 #	Map Reduce code would probably run faster if my laptop were not running the database...
@@ -50,6 +50,7 @@ if __name__ == '__main__':
 			+"	}"
 			+"	return total;"
 			+"}")
+
 	db.pages.map_reduce(m, r, {'reduce':'words'}, 
 			query={'_words': {'$ne': False}, '_wordsAdded': False})
 
